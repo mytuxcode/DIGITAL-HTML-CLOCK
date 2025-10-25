@@ -1,6 +1,7 @@
 # ⏰ Digital HTML Clock
 
-A sleek, responsive, and fully interactive **Digital Clock Web App** built entirely in **HTML, CSS, and JavaScript** — no external dependencies required.  
+A sleek, responsive, and fully interactive **Digital Clock Web App** built entirely in **HTML, CSS, and JavaScript** — no external dependencies required.
+
 This lightweight utility displays the current time in 12-hour or 24-hour format, supports theme customization, and remembers your preferences using `localStorage`.
 
 ---
