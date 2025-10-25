@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Digital Clock</title>
+  <style>
+    :root{
+      --bg: #222;
+      --fg: #fff;
+      --clock-bg: rgba(0,0,0,0.35);
+      --clock-radius: 0.35rem;
+      --accent: #3aa0ff;
+      --menu-bg: rgba(0,0,0,0.6);
+      --gear-size: 1.25rem;
+    }
+
+    html,body{
+      height:100%;
+      margin:0;
+      background:var(--bg);
+      color:var(--fg);
+      font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+
+    /* clock wrapper positioned in viewport */
+    #clock{
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4em 0.9em 0.25em calc(0.25em); /* keep room for the gear */
+      border-radius: var(--clock-radius);
+      background: var(--clock-bg);
+      color: var(--fg);
+      /* default responsive size, can be overridden inline by userFontSize */
+      font-size: clamp(1.25rem, 4vh + 4vw, 8rem);
+      line-height: 1;
+      transition: left 700ms cubic-bezier(.2,.8,.2,1), top 700ms cubic-bezier(.2,.8,.2,1);
+      will-change: left, top;
+      user-select: none;
+      z-index: 1000;
+      pointer-events: auto;
+    }
+
+    /* When user sets an explicit font size we add the .user-size class so inline style applies cleanly */
+    #clock.user-size {
+      /* inline style from JS will set font-size directly */
+    }
+
+    /* remove transition while actively dragging to avoid lag/animation */
+    #clock.dragging {
+      transition: none !important;
+      cursor: move;
+      user-select: none;
+      touch-action: none; /* prevent double-pan on touch */
+    }
+
+    /* Keep the time text non-interactive so clicks go to the gear/menu */
+    #clock .time {
+      pointer-events: none;
+      display:inline-block;
+    }
+
+    /* gear button positioned in the top-right corner of the clock */
+    .gear-container {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+    }
+
+    .gear-btn{
+      width: var(--gear-size);
+      height: var(--gear-size);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.125rem;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.06);
+      color: var(--fg);
+      cursor: pointer;
+      transition: background-color 160ms, transform 160ms;
+      flex-shrink: 0;
+    }
+    .gear-btn svg { width: 0.9em; height: 0.9em; display:block; }
+    .gear-btn:focus { outline: 2px solid rgba(58,160,255,0.22); }
+    .gear-btn:hover { background: rgba(255,255,255,0.03); transform: rotate(10deg); }
+
+    /* settings popover */
+    .settings-popover{
+      position: absolute;
+      right: 0;
+      top: calc(100% + 8px);
+      min-width: 240px;
+      background: var(--menu-bg);
+      border-radius: 8px;
+      padding: 0.5rem;
+      box-shadow: 0 6px 22px rgba(0,0,0,0.6);
+      display: none;
+      flex-direction: column;
+      gap: 0.4rem;
+      z-index: 1100;
+      backdrop-filter: blur(6px);
+    }
+    .settings-popover[data-open="true"] { display: flex; }
+
+    .setting-row{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 0.5rem;
+      padding: 0.25rem 0.25rem;
+      border-radius: 6px;
+    }
+    .setting-row label { font-size: 0.92rem; display:flex; align-items:center; gap:0.5rem; }
+    .setting-row .control { display:flex; align-items:center; gap:0.5rem; }
+
+    .setting-row select,
+    .setting-row input[type="color"],
+    .setting-row input[type="range"],
+    .setting-row button.toggle {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.07);
+      color: var(--fg);
+      padding: 0.25rem 0.4rem;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .setting-row button.toggle[aria-checked="true"] {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border-color: var(--accent);
+    }
+
+    .small-muted { font-size:0.78rem; opacity:0.85; }
+
+    /* small-screen tweaks */
+    @media (max-width:420px){
+      #clock { font-size: clamp(1rem, 5.5vw, 5.5rem); padding: 0.3em 1.05em 0.2em 0.3em; }
+      .settings-popover { min-width: 200px; right: 0; }
+    }
+
+    /* If user prefers reduced motion, remove transitions */
+    @media (prefers-reduced-motion: reduce){
+      #clock{ transition: none; }
+      .gear-btn:hover { transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <!-- clock wrapper contains the time and an absolutely positioned gear in its top-right corner -->
+  <div id="clock" role="timer" aria-atomic="true" aria-label="Digital clock" tabindex="0" aria-grabbed="false">
+    <span class="time" aria-hidden="false"></span>
+
+    <!-- gear container placed at top-right of the clock -->
+    <div class="gear-container" style="pointer-events:auto;">
+      <button class="gear-btn" id="gearBtn" aria-haspopup="true" aria-expanded="false" aria-label="Open clock settings" title="Open clock settings">
+        <!-- gear SVG -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L4.3 4.9a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09c0 .64.37 1.22 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.44.44-.54 1.1-.33 1.66V9c.64 0 1.22.37 1.51 1H21a2 2 0 0 1 0 4h-.09c-.64 0-1.22.37-1.51 1z"></path>
+          <circle cx="12" cy="12" r="3"></circle>
+        </svg>
+      </button>
+
+      <div class="settings-popover" id="settingsPopover" role="menu" aria-label="Clock settings" data-open="false">
+        <div class="setting-row" role="none">
+          <label>
+            <span>Pause movement</span>
+            <div class="control">
+              <button class="toggle" id="toggleMove" role="menuitemcheckbox" aria-checked="false" title="Pause or resume movement">Pause</button>
+            </div>
+          </label>
+        </div>
+
+        <div class="setting-row" role="none">
+          <label>
+            <span>24-hour format</span>
+            <div class="control">
+              <button class="toggle" id="toggleFormat" role="menuitemcheckbox" aria-checked="false" title="Switch between 12/24 hour format">24h</button>
+            </div>
+          </label>
+        </div>
+
+        <div class="setting-row" role="none">
+          <label for="fontSelect">
+            <span>Font</span>
+            <div class="control">
+              <select id="fontSelect" title="Choose clock font" aria-label="Choose clock font">
+                <option value="system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial">System UI</option>
+                <option value="'Helvetica Neue', Arial, sans-serif">Helvetica Neue</option>
+                <option value="'Segoe UI', Tahoma, Geneva, sans-serif">Segoe UI</option>
+                <option value="'Roboto', 'Helvetica', 'Arial', sans-serif">Roboto</option>
+                <option value="'Courier New', Courier, monospace">Courier New (monospace)</option>
+                <option value="Georgia, 'Times New Roman', serif">Georgia (serif)</option>
+                <option value="'Fira Code', 'Courier New', monospace">Fira Code (monospace)</option>
+              </select>
+            </div>
+          </label>
+        </div>
+
+        <div class="setting-row" role="none">
+          <label for="colorInput">
+            <span>Color</span>
+            <div class="control">
+              <input id="colorInput" type="color" title="Choose text color" aria-label="Choose text color">
+            </div>
+          </label>
+        </div>
+
+        <div class="setting-row" role="none">
+          <label for="sizeRange">
+            <span>Size</span>
+            <div class="control" style="align-items:center;">
+              <input id="sizeRange" type="range" min="0.6" max="6" step="0.1" value="1" aria-label="Adjust font size">
+              <div id="sizeValue" class="small-muted" aria-hidden="true" style="min-width:40px; text-align:right;">1.0rem</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="setting-row" role="none">
+          <label>
+            <span>Reset position</span>
+            <div class="control">
+              <button class="toggle" id="resetPosition" role="menuitem" title="Reset clock to centered position">Reset</button>
+            </div>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const clock = document.getElementById('clock');
+      const timeEl = clock.querySelector('.time');
+      const gearBtn = document.getElementById('gearBtn');
+      const popover = document.getElementById('settingsPopover');
+      const toggleMoveBtn = document.getElementById('toggleMove');
+      const toggleFormatBtn = document.getElementById('toggleFormat');
+      const resetPositionBtn = document.getElementById('resetPosition');
+
+      // new UI elements for customization
+      const fontSelect = document.getElementById('fontSelect');
+      const colorInput = document.getElementById('colorInput');
+      const sizeRange = document.getElementById('sizeRange');
+      const sizeValue = document.getElementById('sizeValue');
+
+      // State with persistence
+      const STORAGE_KEY = 'digital-clock-settings-v1';
+      const stored = (() => {
+        try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
+      })();
+
+      // load persisted values (movement, format, position, font, color, size)
+      let movementEnabled = stored.movementEnabled ?? true;
+      let is24Hour = stored.is24Hour ?? false;
+      let savedX = typeof stored.x === 'number' ? stored.x : null;
+      let savedY = typeof stored.y === 'number' ? stored.y : null;
+      let savedFont = stored.fontFamily ?? null;
+      let savedColor = stored.color ?? null;
+      let savedFontSizeRem = typeof stored.fontSizeRem === 'number' ? stored.fontSizeRem : null;
+
+      // Respect user's reduced-motion preference
+      const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (prefersReduced) movementEnabled = false;
+
+      // Save settings helper (includes position and look)
+      function saveSettings() {
+        try {
+          const x = parseFloat(clock.style.left);
+          const y = parseFloat(clock.style.top);
+          const payload = {
+            movementEnabled,
+            is24Hour,
+            x: Number.isFinite(x) ? x : savedX,
+            y: Number.isFinite(y) ? y : savedY,
+            fontFamily: savedFont,
+            color: savedColor,
+            fontSizeRem: Number.isFinite(savedFontSizeRem) ? savedFontSizeRem : null
+          };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        } catch (_) { /* ignore storage errors */ }
+      }
+
+      // Display time with locale and hour12 option
+      function displayTime(date) {
+        const now = date || new Date();
+        const options = { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: !is24Hour };
+        timeEl.textContent = now.toLocaleTimeString(undefined, options);
+      }
+
+      // Apply look settings (font, color, size)
+      function applyAppearance() {
+        if (savedFont) {
+          clock.style.fontFamily = savedFont;
+        } else {
+          clock.style.fontFamily = '';
+        }
+        if (savedColor) {
+          clock.style.color = savedColor;
+        } else {
+          clock.style.color = '';
+        }
+        if (Number.isFinite(savedFontSizeRem)) {
+          clock.classList.add('user-size');
+          clock.style.fontSize = savedFontSizeRem + 'rem';
+          sizeRange.value = String(savedFontSizeRem);
+          sizeValue.textContent = savedFontSizeRem.toFixed(1) + 'rem';
+        } else {
+          clock.classList.remove('user-size');
+          clock.style.fontSize = '';
+          sizeRange.value = '1';
+          // reflect default computed font-size textually
+          sizeValue.textContent = '';
+        }
+      }
+
+      // Movement: random placement ensuring clock stays in viewport
+      function moveClock() {
+        if (!movementEnabled || prefersReduced || isDragging) return;
+        const rect = clock.getBoundingClientRect();
+        const maxX = Math.max(0, window.innerWidth - rect.width);
+        const maxY = Math.max(0, window.innerHeight - rect.height);
+        const x = maxX > 0 ? Math.floor(Math.random() * (maxX + 1)) : 0;
+        const y = maxY > 0 ? Math.floor(Math.random() * (maxY + 1)) : 0;
+        clock.style.left = x + 'px';
+        clock.style.top = y + 'px';
+      }
+
+      // Keep on-screen when resizing
+      function clampPositionToViewport() {
+        const rect = clock.getBoundingClientRect();
+        const maxX = Math.max(0, window.innerWidth - rect.width);
+        const maxY = Math.max(0, window.innerHeight - rect.height);
+        let x = parseFloat(clock.style.left);
+        let y = parseFloat(clock.style.top);
+        if (!Number.isFinite(x)) x = savedX ?? 0;
+        if (!Number.isFinite(y)) y = savedY ?? 0;
+        if (x > maxX) x = maxX;
+        if (y > maxY) y = maxY;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        clock.style.left = x + 'px';
+        clock.style.top = y + 'px';
+      }
+      window.addEventListener('resize', clampPositionToViewport);
+
+      // Movement interval
+      const MOVE_INTERVAL_MS = 10_000;
+      let movementTimer = null;
+      function startMovementInterval() {
+        if (movementTimer) clearInterval(movementTimer);
+        movementTimer = setInterval(() => { if (movementEnabled && !prefersReduced && !isDragging) moveClock(); }, MOVE_INTERVAL_MS);
+      }
+
+      // Microsecond-synced ticking using performance.now()
+      let tickTimer = null;
+      function startTicking() {
+        if (tickTimer) clearTimeout(tickTimer);
+        function tick() {
+          const now = new Date();
+          displayTime(now);
+          const perf = performance.now();
+          const delay = Math.max(0, 1000 - (perf % 1000));
+          tickTimer = setTimeout(tick, delay);
+        }
+        const initialPerf = performance.now();
+        const initialDelay = Math.max(0, 1000 - (initialPerf % 1000));
+        tickTimer = setTimeout(tick, initialDelay);
+      }
+
+      // Settings UI helpers
+      function openPopover() {
+        popover.setAttribute('data-open', 'true');
+        gearBtn.setAttribute('aria-expanded', 'true');
+        updateTogglesUI();
+        syncAppearanceUI();
+        adjustPopoverPosition();
+        toggleMoveBtn.focus();
+        document.addEventListener('keydown', onDocumentKeyDown);
+        document.addEventListener('pointerdown', onDocumentPointerDown);
+      }
+      function closePopover() {
+        popover.setAttribute('data-open', 'false');
+        gearBtn.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('keydown', onDocumentKeyDown);
+        document.removeEventListener('pointerdown', onDocumentPointerDown);
+        gearBtn.focus();
+      }
+      function togglePopover() {
+        const open = popover.getAttribute('data-open') === 'true';
+        if (open) closePopover(); else openPopover();
+      }
+      function onDocumentKeyDown(e) { if (e.key === 'Escape') closePopover(); }
+      function onDocumentPointerDown(e) { if (!popover.contains(e.target) && !gearBtn.contains(e.target)) closePopover(); }
+
+      // Adjust popover horizontal position if it would overflow the viewport
+      function adjustPopoverPosition() {
+        requestAnimationFrame(() => {
+          const popRect = popover.getBoundingClientRect();
+          const overflowRight = popRect.right - window.innerWidth;
+          if (overflowRight > 8) { popover.style.right = (8 + overflowRight) + 'px'; }
+          else { popover.style.right = '0px'; }
+        });
+      }
+
+      // Update toggle buttons UI text/aria
+      function updateTogglesUI() {
+        if (prefersReduced) {
+          toggleMoveBtn.setAttribute('aria-checked', 'true');
+          toggleMoveBtn.setAttribute('disabled', 'true');
+          toggleMoveBtn.textContent = 'Disabled (reduced motion)';
+        } else {
+          toggleMoveBtn.removeAttribute('disabled');
+          toggleMoveBtn.setAttribute('aria-checked', String(!movementEnabled));
+          toggleMoveBtn.textContent = movementEnabled ? 'Pause' : 'Resume';
+        }
+        toggleFormatBtn.setAttribute('aria-checked', String(is24Hour));
+        toggleFormatBtn.textContent = is24Hour ? '24h (on)' : '12h (on)';
+      }
+
+      // Appearance UI synchronization
+      function syncAppearanceUI() {
+        if (savedFont) fontSelect.value = savedFont;
+        else fontSelect.value = fontSelect.options[0].value;
+
+        if (savedColor) colorInput.value = savedColor;
+        else {
+          // default: take current computed color of the clock or fallback to white
+          const comp = getComputedStyle(clock).color;
+          // create a temporary canvas to convert rgb->hex would be overkill; default to #ffffff
+          colorInput.value = savedColor || '#ffffff';
+        }
+
+        if (Number.isFinite(savedFontSizeRem)) {
+          sizeRange.value = String(savedFontSizeRem);
+          sizeValue.textContent = savedFontSizeRem.toFixed(1) + 'rem';
+        } else {
+          sizeRange.value = '1';
+          sizeValue.textContent = '';
+        }
+      }
+
+      // Toggle handlers
+      toggleMoveBtn.addEventListener('click', () => {
+        if (prefersReduced) return;
+        movementEnabled = !movementEnabled;
+        updateTogglesUI();
+        saveSettings();
+        if (movementEnabled) moveClock();
+      });
+      toggleFormatBtn.addEventListener('click', () => {
+        is24Hour = !is24Hour;
+        updateTogglesUI();
+        saveSettings();
+        displayTime(new Date());
+      });
+
+      // Appearance handlers
+      fontSelect.addEventListener('change', (e) => {
+        savedFont = e.target.value || null;
+        applyAppearance();
+        saveSettings();
+      });
+      colorInput.addEventListener('input', (e) => {
+        savedColor = e.target.value;
+        applyAppearance();
+        saveSettings();
+      });
+      sizeRange.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        if (Number.isFinite(val)) {
+          savedFontSizeRem = val;
+          sizeValue.textContent = val.toFixed(1) + 'rem';
+          applyAppearance();
+        }
+      });
+      sizeRange.addEventListener('change', () => { saveSettings(); });
+
+      // Reset now centers the clock (based on current viewport and clock size), persists the position, and closes the popover.
+      resetPositionBtn.addEventListener('click', () => {
+        requestAnimationFrame(() => {
+          const rect = clock.getBoundingClientRect();
+          const centerX = Math.round((window.innerWidth - rect.width) / 2);
+          const centerY = Math.round((window.innerHeight - rect.height) / 2);
+          const x = Math.max(0, Math.min(centerX, window.innerWidth - rect.width));
+          const y = Math.max(0, Math.min(centerY, window.innerHeight - rect.height));
+          savedX = x;
+          savedY = y;
+          clock.style.left = x + 'px';
+          clock.style.top = y + 'px';
+          saveSettings();
+          closePopover();
+        });
+      });
+
+      // Gear button behavior
+      gearBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePopover(); });
+      gearBtn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePopover(); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); openPopover(); }
+      });
+
+      // -------------------------
+      // Drag (pointer) support (unchanged)
+      // -------------------------
+      let isDragging = false;
+      let dragPointerId = null;
+      let startX = 0;
+      let startY = 0;
+      let startLeft = 0;
+      let startTop = 0;
+
+      function isInteractiveTarget(target) {
+        return !!(target.closest('button') || target.closest('a') || target.closest('.settings-popover') || target.closest('select') || target.closest('input'));
+      }
+
+      function onPointerDown(e) {
+        if (e.button && e.button !== 0) return;
+        if (isInteractiveTarget(e.target)) return;
+        dragPointerId = e.pointerId;
+        try { clock.setPointerCapture(dragPointerId); } catch (_) {}
+        isDragging = true;
+        clock.classList.add('dragging');
+        clock.setAttribute('aria-grabbed', 'true');
+        startX = e.clientX; startY = e.clientY;
+        const computedLeft = parseFloat(clock.style.left);
+        const computedTop = parseFloat(clock.style.top);
+        startLeft = Number.isFinite(computedLeft) ? computedLeft : (savedX ?? 0);
+        startTop = Number.isFinite(computedTop) ? computedTop : (savedY ?? 0);
+        closePopover();
+      }
+
+      function onPointerMove(e) {
+        if (!isDragging || e.pointerId !== dragPointerId) return;
+        e.preventDefault();
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        let newLeft = startLeft + dx;
+        let newTop = startTop + dy;
+        const rect = clock.getBoundingClientRect();
+        const maxX = Math.max(0, window.innerWidth - rect.width);
+        const maxY = Math.max(0, window.innerHeight - rect.height);
+        if (newLeft < 0) newLeft = 0;
+        if (newTop < 0) newTop = 0;
+        if (newLeft > maxX) newLeft = maxX;
+        if (newTop > maxY) newTop = maxY;
+        clock.style.left = newLeft + 'px';
+        clock.style.top = newTop + 'px';
+      }
+
+      function onPointerUp(e) {
+        if (!isDragging || e.pointerId !== dragPointerId) return;
+        try { clock.releasePointerCapture(dragPointerId); } catch (_) {}
+        dragPointerId = null;
+        isDragging = false;
+        clock.classList.remove('dragging');
+        clock.setAttribute('aria-grabbed', 'false');
+        savedX = parseFloat(clock.style.left) || 0;
+        savedY = parseFloat(clock.style.top) || 0;
+        saveSettings();
+      }
+
+      clock.addEventListener('pointerdown', onPointerDown, { passive: false });
+      window.addEventListener('pointermove', onPointerMove, { passive: false });
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
+
+      // -------------------------
+      // Initialization
+      // -------------------------
+      function applySavedPosition() {
+        if (Number.isFinite(savedX) && Number.isFinite(savedY)) {
+          requestAnimationFrame(() => {
+            const rect = clock.getBoundingClientRect();
+            const maxX = Math.max(0, window.innerWidth - rect.width);
+            const maxY = Math.max(0, window.innerHeight - rect.height);
+            let x = savedX; let y = savedY;
+            if (x > maxX) x = maxX;
+            if (y > maxY) y = maxY;
+            if (x < 0) x = 0;
+            if (y < 0) y = 0;
+            clock.style.left = x + 'px';
+            clock.style.top = y + 'px';
+          });
+        } else {
+          requestAnimationFrame(() => {
+            clock.style.left = '8px'; clock.style.top = '8px';
+          });
+        }
+      }
+
+      // Initialize UI state and appearance
+      function initUIState() {
+        updateTogglesUI();
+        if (savedFont) fontSelect.value = savedFont;
+        if (savedColor) colorInput.value = savedColor;
+        if (Number.isFinite(savedFontSizeRem)) {
+          sizeRange.value = String(savedFontSizeRem);
+          sizeValue.textContent = savedFontSizeRem.toFixed(1) + 'rem';
+        } else {
+          sizeRange.value = '1'; sizeValue.textContent = '';
+        }
+        applyAppearance();
+      }
+
+      // Start everything
+      initUIState();
+      displayTime(new Date());
+      startTicking();
+      applySavedPosition();
+      moveClock();
+      startMovementInterval();
+      popover.setAttribute('data-open', 'false');
+      gearBtn.setAttribute('aria-expanded', 'false');
+      saveSettings();
+
+      // expose for debugging if needed
+      window._digitalClock = {
+        startTicking,
+        stopTicking: () => { if (tickTimer) clearTimeout(tickTimer); },
+        startMovementInterval,
+        stopMovementInterval: () => { if (movementTimer) clearInterval(movementTimer); },
+        toggleMovement: () => { movementEnabled = !movementEnabled; updateTogglesUI(); saveSettings(); },
+        set24Hour: (v) => { is24Hour = Boolean(v); displayTime(new Date()); saveSettings(); },
+        getState: () => ({ movementEnabled, is24Hour, x: parseFloat(clock.style.left), y: parseFloat(clock.style.top),
+                           font: savedFont, color: savedColor, fontSizeRem: savedFontSizeRem })
+      };
+    })();
+  </script>
+</body>
+</html>
