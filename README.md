@@ -31,6 +31,8 @@ This lightweight utility displays the current time in 12-hour or 24-hour format,
    git clone https://github.com/mytuxcode/digital-html-clock.git
    cd digital-clock
 
+---
+
 ## 🐧 Author
 
 **Maintainer:** [@mytuxcode](https://github.com/mytuxcode)  
